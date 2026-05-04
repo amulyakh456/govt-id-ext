@@ -129,7 +129,9 @@ IGNORED_LABELS = {
     "age", "age_as_on",  # voter cards: age numerals, not part of the schema
     "rto", "state", "vehicle_type",  # DL: not in schema
     "nation", "nationality",  # passport: not in schema
-    "mrz1", "mrz2",  # passport machine-readable zone, not user-facing
+    # Note: MRZ1/MRZ2 are NOT ignored — the backend parses them to derive the
+    # canonical surname / given_names / full_name (the visible-text "Name"
+    # bbox often misses the second line of the name on Indian passports).
     # Whole-card outlines emitted by per-type detectors. The raw classes have
     # both "card_voterid_1_front" (.pt-embedded) and "card_voter_id_1_front"
     # (config.json) variants — list both.

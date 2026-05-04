@@ -180,6 +180,73 @@ function normalizeField(fieldKey, value) {
   }
 }
 
+// Parse a passport's TD3-format MRZ. The MRZ is two lines of 44 chars each at
+// the bottom of the data page, machine-readable and far more reliable than
+// OCR'ing the visible text — particularly for names, where the visible "Name"
+// bbox sometimes misses the second line.
+//
+// Line 1 layout: P<{COUNTRY:3}{SURNAME}<<{GIVEN_NAMES}<<<...
+// Line 2 layout: {PASSPORT_NO:9}<{COUNTRY:3}{DOB:6}{CHK}{SEX}{EXP:6}{CHK}{PERSONAL_NO}<<
+//
+// We tolerate OCR slop: stray whitespace, '<' read as 'K' or 'C', leading
+// garbage before "P<", numeric / letter swaps in passport_number positions.
+function parseMrz(mrz1Raw, mrz2Raw) {
+  const out = {};
+  if (!mrz1Raw && !mrz2Raw) return out;
+
+  const clean = (s) =>
+    String(s || "").toUpperCase().replace(/[^A-Z0-9<]/g, "");
+
+  // ---- Line 1: name ----
+  if (mrz1Raw) {
+    const line1 = clean(mrz1Raw);
+    // Find "P<" (or close OCR variants K</C</< combined) and the 3-letter
+    // country code right after; everything beyond is the name section.
+    const m = line1.match(/P[<KC]?([A-Z]{3})(.+)/);
+    if (m) {
+      const namePart = m[2];
+      const [surnameRaw, givenRaw = ""] = namePart.split("<<");
+      const surname = surnameRaw.replace(/<+/g, " ").trim();
+      const given = givenRaw.replace(/<+/g, " ").trim();
+      if (surname) out.surname = surname;
+      if (given) out.given_names = given;
+      if (surname && given) out.full_name = `${given} ${surname}`;
+      else if (surname) out.full_name = surname;
+    }
+  }
+
+  // ---- Line 2: passport number, DOB, sex, expiry ----
+  if (mrz2Raw) {
+    const line2 = clean(mrz2Raw);
+    if (line2.length >= 28) {
+      const passportNum = line2.slice(0, 9).replace(/</g, "");
+      const dobStr = line2.slice(13, 19);
+      const sex = line2.charAt(20);
+      const expStr = line2.slice(21, 27);
+
+      if (/^[A-Z0-9]{6,9}$/.test(passportNum)) out.passport_number = passportNum;
+
+      const yymmddToFull = (s) => {
+        if (!/^\d{6}$/.test(s)) return null;
+        const yy = parseInt(s.slice(0, 2), 10);
+        const mm = s.slice(2, 4);
+        const dd = s.slice(4, 6);
+        // Two-digit year disambiguation per ICAO: cutover at 50.
+        const yyyy = yy > 50 ? `19${s.slice(0, 2)}` : `20${s.slice(0, 2)}`;
+        return `${dd}/${mm}/${yyyy}`;
+      };
+      const dob = yymmddToFull(dobStr);
+      const exp = yymmddToFull(expStr);
+      if (dob) out.dob = dob;
+      if (exp) out.date_of_expiry = exp;
+      if (sex === "M") out.gender = "MALE";
+      else if (sex === "F") out.gender = "FEMALE";
+    }
+  }
+
+  return out;
+}
+
 // Many Aadhaar / Voter ID detectors emit a single ADDRESS region that contains both
 // "W/O: Spouse Name" or "S/O: Father Name" AND the postal address. Try to split them.
 function extractRelativeFromAddress(addressValue) {
@@ -217,6 +284,28 @@ function normalizeFields(rawFields) {
     } else {
       out[key] = { value: normalizeField(key, val) };
     }
+  }
+
+  // MRZ post-processing: passports carry a machine-readable zone which is far
+  // more reliable than the visible-text "Name" bbox (the latter routinely
+  // misses the second line of given names on Indian passports). If the
+  // detector picked up MRZ1/MRZ2, parse them and use the result as the
+  // canonical source for surname / given_names / full_name. We still fall
+  // back to the visible-text fields for missing pieces.
+  const mrz1Value = out.mrz1?.value;
+  const mrz2Value = out.mrz2?.value;
+  if (mrz1Value || mrz2Value) {
+    const mrz = parseMrz(mrz1Value, mrz2Value);
+    for (const k of ["surname", "given_names", "full_name"]) {
+      if (mrz[k]) out[k] = { value: mrz[k], derived_from: "mrz" };
+    }
+    for (const k of ["passport_number", "dob", "date_of_expiry", "gender"]) {
+      if (mrz[k] && !out[k]?.value) out[k] = { value: mrz[k], derived_from: "mrz" };
+    }
+    // The MRZ rows themselves are an implementation detail — don't surface
+    // them in the response.
+    delete out.mrz1;
+    delete out.mrz2;
   }
 
   // Address post-processing: pull W/O / S/O / D/O out into husband_name / father_name
