@@ -1,6 +1,18 @@
+---
+title: Indian Government ID Extractor
+emoji: 🪪
+colorFrom: blue
+colorTo: indigo
+sdk: docker
+app_port: 7860
+pinned: false
+---
+
 # Indian Government ID Extractor
 
 Extracts structured fields (name, DOB, ID number, address, etc.) from photos of Indian government IDs — Aadhaar, PAN, Driving Licence, Passport, Voter ID — using a YOLO classifier + per-type field detectors + PaddleOCR pipeline.
+
+The YAML block above is the Hugging Face Spaces config — when this repo is connected to a Space (Docker SDK), the Space builds the [Dockerfile](Dockerfile) at the root, which packages the **detection service** as a self-contained inference API.
 
 ## Architecture
 
@@ -45,36 +57,67 @@ bash start.sh   # boots all three; opens http://localhost:5176
 
 First boot downloads ~500 MB of model weights from Hugging Face. Subsequent boots are fast.
 
-## Deploying to Render
+## Deploying — free path (Hugging Face Spaces + Render)
 
-A `render.yaml` blueprint is committed at the repo root. After connecting this repo to Render:
+The detection service is heavy (PyTorch + PaddleOCR + 6 YOLO models, ~1.5 GB RAM). Render's free tier (512 MB) will OOM on it; HF Spaces' free CPU Basic tier (16 GB RAM, 2 vCPU) is purpose-built for this kind of model-serving workload, so we host detection there. The lightweight Node backend and static frontend live on Render's free tier.
 
-1. **Create the blueprint** — Render reads `render.yaml` and provisions three services:
-   - `govt-id-detection` (Python web, **Standard plan / 2 GB RAM** — model load needs ~1.5 GB)
-   - `govt-id-backend` (Node web, Starter plan)
-   - `govt-id-frontend` (static site, free)
+```
+[Browser]
+   ↓ HTTPS
+[Render — frontend (static, free)]
+   ↓ HTTPS
+[Render — backend (Node, free web service)]
+   ↓ HTTPS
+[Hugging Face Space — detection (Docker, free CPU Basic)]
+```
 
-2. **Wait for the first deploy.** Render needs the services to exist before they have public URLs.
+**Total cost: $0/month.**
 
-3. **Wire up the cross-service URLs** in each service's Environment tab:
+### Step 1 — Push this repo to GitHub
+
+(Already done if you're reading this from GitHub.)
+
+### Step 2 — Create the Hugging Face Space
+
+1. Go to https://huggingface.co/new-space
+2. Owner: your HF username. Name: `govt-id-detection` (or whatever).
+3. SDK: **Docker** → "Blank"
+4. Visibility: Public or Private (both are free).
+5. Hardware: leave default ("CPU basic — 2 vCPU, 16 GB").
+6. Create.
+7. On the new Space's page, click **Settings → Repository → "Link to a GitHub repo"** and link your `govt-id-extraction` repo. (Alternatively, you can `git push` the repo's contents to the Space's git URL directly — `https://huggingface.co/spaces/<you>/govt-id-detection.git`.)
+8. The Space will build the root [Dockerfile](Dockerfile) — first build takes ~10 minutes (PyTorch + PaddleOCR + model weight downloads bake into the image). Subsequent restarts boot in seconds.
+9. Note the Space's public URL: `https://<you>-govt-id-detection.hf.space`. That's your `DETECTION_URL`.
+
+### Step 3 — Deploy backend + frontend to Render
+
+`render.yaml` provisions both as free services.
+
+1. Go to https://dashboard.render.com/blueprints → **New Blueprint** → connect your GitHub repo.
+2. Render reads `render.yaml` and creates two services: `govt-id-backend` (Node web, free) and `govt-id-frontend` (static, free).
+3. Wait for the first deploy. URLs become available after.
+4. Set env vars in each service's Environment tab:
 
    | Service | Variable | Value |
    |---|---|---|
-   | govt-id-backend | `DETECTION_URL` | `https://govt-id-detection.onrender.com` |
+   | govt-id-backend | `DETECTION_URL` | `https://<you>-govt-id-detection.hf.space` |
    | govt-id-backend | `CORS_ORIGIN` | `https://govt-id-frontend.onrender.com` |
    | govt-id-frontend | `VITE_API_URL` | `https://govt-id-backend.onrender.com` |
 
-4. **Trigger a redeploy** on the backend and frontend so they pick up the URLs.
+5. Manual Deploy → Clear build cache & deploy on both services so they pick up the URLs.
 
-### Cost expectation
+### Cold-start behaviour (free tier)
 
-Render Standard ($25/mo) for detection + Starter ($7/mo) for backend + free static site = **~$32/mo**. The free/starter tiers (512 MB) **will OOM** on the detection service — its YOLO + PaddleOCR + 6 model load is around 1.5 GB at runtime.
+Free Render and HF Spaces both sleep after inactivity:
+- Render free web service: sleeps after ~15 min idle, ~50s wake.
+- HF Space free: sleeps after ~48 h idle, ~30s wake.
+- A truly cold "first hit": ~60–90s for both to wake + the detection service to finish loading models. Subsequent requests are fast (~2–4s).
 
-### Cold-start behaviour
+If you need always-on for production traffic, upgrade only the bottleneck — typically the HF Space ($0.05/hr CPU Upgrade, ~$36/mo for always-on).
 
-First request after a build takes ~60 seconds because the detection service has to load 6 YOLO models and PaddleOCR's recogniser/detector into memory. Steady-state per-request latency is 1–4 seconds depending on image size and rotation passes.
+### Security note
 
-If you don't want to re-download model weights on every restart, attach a persistent disk to `govt-id-detection` and set `HF_HOME=/var/data/hf` (the `render.yaml` has a commented stub).
+The HF Space is a public HTTPS endpoint with no auth. The Node backend talks to it server-to-server with a Render IP, but the URL is reachable from anywhere. For a demo this is fine; for production add an auth header (e.g. an API key check in `detection-service/main.py`) and pass it from the backend.
 
 ## Supported document types
 

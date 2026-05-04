@@ -1,51 +1,19 @@
-# Render blueprint for the Indian Government ID Extractor.
+# Render blueprint — provisions the lightweight Node backend and static
+# frontend on Render's free tier. The heavy Python detection service lives on
+# Hugging Face Spaces (free CPU Basic, 16 GB RAM); see README → Deploying.
 #
-# Architecture:
-#   detection-service  Python FastAPI + YOLO + PaddleOCR (heavy, needs ≥2 GB)
-#   backend            Node/Express thin gateway (normalises + validates fields)
-#   frontend           React/Vite static site (calls backend over HTTPS)
-#
-# Deployment notes:
-# - The detection service loads ~6 YOLO models + PaddleOCR weights into memory
-#   on boot — runtime footprint is roughly 1.2-1.8 GB. Render's free and
-#   starter plans (512 MB) will OOM. Use the Standard plan ($25/mo) at minimum.
-# - First build downloads the model weights from Hugging Face. Subsequent
-#   restarts re-download unless you attach a persistent disk and point
-#   HF_HOME at it (commented section below).
-# - After the first deploy, fill in the cross-service URLs:
-#     backend.DETECTION_URL  = https://<detection-service-name>.onrender.com
-#     backend.CORS_ORIGIN    = https://<frontend-name>.onrender.com
-#     frontend.VITE_API_URL  = https://<backend-name>.onrender.com
-#   (Render exposes service URLs after the first successful deploy; you cannot
-#   know them at create time, so commit, deploy, then edit env vars.)
+# After the first deploy, fill in the cross-service URLs in each service's
+# Environment tab:
+#   govt-id-backend  → DETECTION_URL = https://<you>-govt-id-detection.hf.space
+#   govt-id-backend  → CORS_ORIGIN   = https://govt-id-frontend.onrender.com
+#   govt-id-frontend → VITE_API_URL  = https://govt-id-backend.onrender.com
+# Then trigger a redeploy on each so the new env vars take effect.
 
 services:
   - type: web
-    name: govt-id-detection
-    runtime: python
-    plan: standard         # 2 GB RAM — minimum for the model load
-    region: oregon
-    rootDir: detection-service
-    buildCommand: pip install --upgrade pip && pip install -r requirements.txt
-    startCommand: python main.py
-    healthCheckPath: /health
-    autoDeploy: true
-    envVars:
-      - key: HOST
-        value: 0.0.0.0
-      - key: PYTHON_VERSION
-        value: 3.11.9
-      # Render injects PORT automatically — no need to set it.
-    # Uncomment to keep the HuggingFace cache between deploys (faster restarts).
-    # disk:
-    #   name: hf-cache
-    #   mountPath: /var/data/hf
-    #   sizeGB: 5
-
-  - type: web
     name: govt-id-backend
     runtime: node
-    plan: starter          # Lightweight Express; 512 MB is plenty.
+    plan: free
     region: oregon
     rootDir: backend
     buildCommand: npm install
@@ -58,7 +26,7 @@ services:
       - key: NODE_VERSION
         value: 20.18.0
       - key: DETECTION_URL
-        sync: false        # set after first deploy of detection service
+        sync: false        # set after creating the HF Space
       - key: CORS_ORIGIN
         sync: false        # set to the frontend's https URL
       - key: DETECTION_TIMEOUT_MS
@@ -76,7 +44,7 @@ services:
     autoDeploy: true
     envVars:
       - key: VITE_API_URL
-        sync: false        # set to the backend's https URL
+        sync: false        # set to the backend's https URL after first deploy
     routes:
       - type: rewrite
         source: /*
