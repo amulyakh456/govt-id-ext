@@ -24,8 +24,17 @@ WORKDIR /home/user/app
 
 # Python deps. Do this before copying app code so dep changes don't bust the
 # layer cache when only Python source changes.
+#
+# Install CPU-only PyTorch FIRST — without this, ultralytics' transitive
+# `torch>=1.8.0` constraint resolves to the default GPU build, which pulls
+# ~3 GB of CUDA toolkit wheels we don't need (HF Spaces free tier is CPU-only).
+# Pinning here means pip already has torch satisfied when it gets to
+# requirements.txt.
 COPY --chown=user:user detection-service/requirements.txt ./requirements.txt
 RUN pip install --no-cache-dir --user --upgrade pip \
+ && pip install --no-cache-dir --user \
+        --index-url https://download.pytorch.org/whl/cpu \
+        torch==2.4.1 torchvision==0.19.1 \
  && pip install --no-cache-dir --user -r requirements.txt
 
 # Pre-download the YOLO model weights so they're embedded in the image and the
