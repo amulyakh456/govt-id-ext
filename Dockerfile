@@ -37,22 +37,11 @@ RUN pip install --no-cache-dir --user --upgrade pip \
         torch==2.4.1 torchvision==0.19.1 \
  && pip install --no-cache-dir --user -r requirements.txt
 
-# Pre-download the YOLO model weights so they're embedded in the image and the
-# first request after a cold start is fast (no HF Hub round-trip).
-RUN python -c "\
-from huggingface_hub import hf_hub_download;\
-files = ['config.json',\
- 'models/Id_Classifier.pt',\
- 'models/Aadhaar_Card.pt',\
- 'models/Pan_Card.pt',\
- 'models/Driving_License.pt',\
- 'models/Passport.pt',\
- 'models/Voter_Id.pt'];\
-[hf_hub_download('logasanjeev/indian-id-validator', f) for f in files]"
-
-# Pre-warm PaddleOCR — instantiating it once triggers download of the PP-OCRv4
-# detector + recognizer + classifier weights (~60MB) into ~/.paddleocr.
-RUN python -c "from paddleocr import PaddleOCR; PaddleOCR(use_angle_cls=True, lang='en', show_log=False)"
+# Note: we used to pre-download the YOLO + PaddleOCR weights at build time so
+# cold starts didn't need a network round-trip. HF Spaces' build runner can be
+# flaky reaching huggingface.co during build (the install step failed in
+# practice), so the weights now load lazily on first request. First request
+# after a deploy will be ~30-60s slower as a result.
 
 # App source.
 COPY --chown=user:user detection-service/ ./detection-service/
@@ -60,8 +49,7 @@ WORKDIR /home/user/app/detection-service
 
 # Runtime env. HF Spaces injects PORT=7860; main.py reads it.
 ENV HOST=0.0.0.0 \
-    PORT=7860 \
-    HF_HUB_OFFLINE=1
+    PORT=7860
 
 EXPOSE 7860
 
