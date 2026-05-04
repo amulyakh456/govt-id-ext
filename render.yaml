@@ -37,7 +37,6 @@ services:
   - type: web
     name: govt-id-frontend
     runtime: static
-    region: oregon
     rootDir: frontend
     buildCommand: npm install && npm run build
     staticPublishPath: dist
