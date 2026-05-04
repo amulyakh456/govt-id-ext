@@ -1,0 +1,29 @@
+# Dependencies
+node_modules/
+detection-service/venv/
+detection-service/.venv/
+
+# Build output
+dist/
+build/
+
+# Caches
+*.pyc
+__pycache__/
+.cache/
+.pytest_cache/
+.ruff_cache/
+
+# Environment / secrets
+.env
+.env.local
+.env.*.local
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+
+# Logs
+*.log
+nohup.out
